@@ -163,30 +163,33 @@ def clasificar_gasolina(octanaje_redondeado):
     """
     if octanaje_redondeado < 95:
         return {
-            'categoria': 'GASOLINA REGULAR',
+            'categoria': 'GASOLINA <95 OCTANOS',
             'codigo_nc': '2710.12.41',
             'epigrafe': '1.2.2',
             'descripcion': 'Inferior a 95 octanos',
             'emoji': '⚡',
-            'clase': 'result-regular'
+            'clase': 'result-regular',
+            'imagen': '94.png'
         }
     elif octanaje_redondeado <= 98:
         return {
-            'categoria': 'GASOLINA PREMIUM',
+            'categoria': 'GASOLINA 95 OCTANOS',
             'codigo_nc': '2710.12.45',
             'epigrafe': '1.2.2',
             'descripcion': '95 a 98 octanos',
             'emoji': '🚗',
-            'clase': 'result-premium'
+            'clase': 'result-premium',
+            'imagen': '95.png'
         }
     else:  # > 98
         return {
-            'categoria': 'GASOLINA SUPER',
+            'categoria': 'GASOLINA 98 OCTANOS',
             'codigo_nc': '2710.12.49',
             'epigrafe': '1.2.1',
             'descripcion': 'Superior a 98 octanos',
             'emoji': '🏎️',
-            'clase': 'result-super'
+            'clase': 'result-super',
+            'imagen': '98.png'
         }
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -224,7 +227,13 @@ def cargar_modelo():
 # HEADER DE LA APLICACIÓN
 # ═══════════════════════════════════════════════════════════════════════════
 
-st.markdown('<p class="main-header">🤖 Predictor de Octanaje ⛽</p>', unsafe_allow_html=True)
+# Banner superior
+try:
+    st.image('banner.png', use_column_width=True)
+except:
+    # Si no encuentra la imagen, muestra el título normal
+    st.markdown('<p class="main-header">🤖 Predictor de Octanaje ⛽</p>', unsafe_allow_html=True)
+
 st.markdown('<p class="subtitle">Sistema de predicción con clasificación fiscal automática | Precisión: 100% (±0.5)</p>', unsafe_allow_html=True)
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -251,7 +260,7 @@ with st.sidebar:
     # Categoría 1
     st.markdown("""
     <div class="categoria-box categoria-regular">
-        <strong>⚡ GASOLINA REGULAR</strong><br>
+        <strong>⚡ GASOLINA <95 OCTANOS</strong><br>
         <small>< 95 octanos</small><br>
         <strong>Código NC:</strong> 2710.12.41<br>
         <strong>Epígrafe:</strong> 1.2.2
@@ -261,7 +270,7 @@ with st.sidebar:
     # Categoría 2
     st.markdown("""
     <div class="categoria-box categoria-premium">
-        <strong>🚗 GASOLINA PREMIUM</strong><br>
+        <strong>🚗 GASOLINA 95 OCTANOS</strong><br>
         <small>95 - 98 octanos</small><br>
         <strong>Código NC:</strong> 2710.12.45<br>
         <strong>Epígrafe:</strong> 1.2.2
@@ -271,7 +280,7 @@ with st.sidebar:
     # Categoría 3
     st.markdown("""
     <div class="categoria-box categoria-super">
-        <strong>🏎️ GASOLINA SUPER</strong><br>
+        <strong>🏎️ GASOLINA 98 OCTANOS</strong><br>
         <small>> 98 octanos</small><br>
         <strong>Código NC:</strong> 2710.12.49<br>
         <strong>Epígrafe:</strong> 1.2.1
@@ -332,8 +341,9 @@ with tab1:
     col1, col2 = st.columns(2)
     
     with col1:
+        st.markdown("#### 🧪 Componentes Principales")
         parafinas = st.number_input(
-            "PARAFINAS (%v/v)", 
+            "**PARAFINAS** (%v/v)", 
             min_value=0.0, 
             max_value=100.0, 
             value=valores['PARAFINAS'], 
@@ -342,7 +352,7 @@ with tab1:
         )
         
         isoparafinas = st.number_input(
-            "ISOPARAFINAS (%v/v)", 
+            "**ISOPARAFINAS** (%v/v)", 
             min_value=0.0, 
             max_value=100.0, 
             value=valores['ISOPARAFINAS'], 
@@ -351,7 +361,7 @@ with tab1:
         )
         
         olefinas = st.number_input(
-            "OLEFINAS (%v/v)", 
+            "**OLEFINAS** (%v/v)", 
             min_value=0.0, 
             max_value=100.0, 
             value=valores['OLEFINAS'], 
@@ -360,7 +370,7 @@ with tab1:
         )
         
         naftenicos = st.number_input(
-            "NAFTÉNICOS (%v/v)", 
+            "**NAFTÉNICOS** (%v/v)", 
             min_value=0.0, 
             max_value=100.0, 
             value=valores['NAFTENICOS'], 
@@ -369,8 +379,9 @@ with tab1:
         )
     
     with col2:
+        st.markdown("#### 🧪 Aromáticos y Oxigenados")
         aromaticos = st.number_input(
-            "AROMÁTICOS (%v/v)", 
+            "**AROMÁTICOS** (%v/v)", 
             min_value=0.0, 
             max_value=100.0, 
             value=valores['AROMATICOS'], 
@@ -379,7 +390,7 @@ with tab1:
         )
         
         etanol = st.number_input(
-            "ETANOL (%v/v)", 
+            "**ETANOL** (%v/v)", 
             min_value=0.0, 
             max_value=100.0, 
             value=valores['ETANOL'], 
@@ -388,7 +399,7 @@ with tab1:
         )
         
         mtbe = st.number_input(
-            "MTBE (%v/v)", 
+            "**MTBE** (%v/v)", 
             min_value=0.0, 
             max_value=100.0, 
             value=valores['MTBE'], 
@@ -397,7 +408,7 @@ with tab1:
         )
         
         etbe = st.number_input(
-            "ETBE (%v/v)", 
+            "**ETBE** (%v/v)", 
             min_value=0.0, 
             max_value=100.0, 
             value=valores['ETBE'], 
@@ -429,8 +440,16 @@ with tab1:
     
     st.markdown("---")
     
-    # Botón de calcular
-    calcular = st.button("🎯 CALCULAR OCTANAJE", type="primary", use_container_width=True)
+    # Botones de calcular y limpiar
+    col_btn1, col_btn2 = st.columns(2)
+    
+    with col_btn1:
+        calcular = st.button("🎯 CALCULAR OCTANAJE", type="primary", use_container_width=True)
+    
+    with col_btn2:
+        if st.button("🔄 LIMPIAR RESULTADOS", use_container_width=True):
+            st.session_state.clear()
+            st.rerun()
     
     if calcular:
         # Preparar datos para predicción
@@ -460,6 +479,14 @@ with tab1:
         # Mostrar resultado
         st.markdown("---")
         st.markdown("## ✨ RESULTADO DE LA PREDICCIÓN")
+        
+        # Mostrar imagen del coche correspondiente
+        try:
+            col_img1, col_img2, col_img3 = st.columns([1, 2, 1])
+            with col_img2:
+                st.image(clasificacion['imagen'], use_column_width=True)
+        except:
+            pass  # Si no encuentra la imagen, continúa sin ella
         
         # Caja de resultado con estilo según categoría
         resultado_html = f"""
@@ -665,9 +692,9 @@ with tab3:
     
     | Octanaje | Categoría | Código NC | Epígrafe |
     |----------|-----------|-----------|----------|
-    | < 95 | GASOLINA REGULAR ⚡ | 2710.12.41 | 1.2.2 |
-    | 95-98 | GASOLINA PREMIUM 🚗 | 2710.12.45 | 1.2.2 |
-    | > 98 | GASOLINA SUPER 🏎️ | 2710.12.49 | 1.2.1 |
+    | < 95 | GASOLINA <95 OCTANOS ⚡ | 2710.12.41 | 1.2.2 |
+    | 95-98 | GASOLINA 95 OCTANOS 🚗 | 2710.12.45 | 1.2.2 |
+    | > 98 | GASOLINA 98 OCTANOS 🏎️ | 2710.12.49 | 1.2.1 |
     """)
     
     st.markdown("### ⚠️ Advertencias y Validaciones")
