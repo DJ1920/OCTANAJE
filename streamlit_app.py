@@ -5,8 +5,7 @@
 ╚═══════════════════════════════════════════════════════════════════════════╝
 
 Aplicación Streamlit para predicción de octanaje en gasolina
-Versión: 1.0
-Autor: Sistema de ML para Refinería
+Versión: 2.0 - CORREGIDA
 """
 
 import streamlit as st
@@ -28,6 +27,10 @@ st.set_page_config(
         'About': "Sistema de predicción de octanaje con ML | Precisión: 100% (±0.5)"
     }
 )
+
+# Inicializar session_state
+if 'resultado' not in st.session_state:
+    st.session_state.resultado = None
 
 # ═══════════════════════════════════════════════════════════════════════════
 # CSS PERSONALIZADO
@@ -92,7 +95,7 @@ st.markdown("""
     }
     
     .octanaje-value {
-        font-size: 5rem;
+        font-size: 4rem;
         font-weight: bold;
         margin: 1rem 0;
         text-shadow: 2px 2px 4px rgba(0,0,0,0.1);
@@ -128,7 +131,6 @@ st.markdown("""
     
     /* Botones */
     .stButton > button {
-        width: 100%;
         border-radius: 10px;
         height: 3rem;
         font-weight: bold;
@@ -151,17 +153,40 @@ st.markdown("""
 # FUNCIONES DE CLASIFICACIÓN
 # ═══════════════════════════════════════════════════════════════════════════
 
-def clasificar_gasolina(octanaje_redondeado):
+def clasificar_gasolina(octanaje_real):
     """
     Clasifica la gasolina según normativa fiscal española.
     
     Args:
-        octanaje_redondeado: Octanaje redondeado al entero más cercano
+        octanaje_real: Octanaje predicho con decimales (valor real sin redondear)
         
     Returns:
-        dict con información de clasificación
+        dict con información de clasificación y advertencias
     """
-    if octanaje_redondeado < 95:
+    # IMPORTANTE: Clasificar con el valor REAL, no con el redondeado
+    
+    # Detectar si está en zona crítica (límite ± tolerancia 0.5)
+    advertencia = None
+    limite_critico = None
+    
+    # Límite crítico en 95.0 (rango de advertencia: 94.5 - 95.5)
+    if 94.5 <= octanaje_real <= 95.5:
+        limite_critico = 95.0
+        if octanaje_real < 95:
+            advertencia = f"⚠️ ADVERTENCIA: Octanaje {octanaje_real:.1f} está muy cerca del límite inferior (95.0). Dentro de tolerancia industrial (±0.5), podría reclasificarse."
+        else:
+            advertencia = f"⚠️ ADVERTENCIA: Octanaje {octanaje_real:.1f} está muy cerca del límite superior (95.0). Dentro de tolerancia industrial (±0.5), podría reclasificarse."
+    
+    # Límite crítico en 98.0 (rango de advertencia: 97.5 - 98.5)
+    elif 97.5 <= octanaje_real <= 98.5:
+        limite_critico = 98.0
+        if octanaje_real <= 98:
+            advertencia = f"⚠️ ADVERTENCIA: Octanaje {octanaje_real:.1f} está muy cerca del límite superior (98.0). Dentro de tolerancia industrial (±0.5), podría reclasificarse."
+        else:
+            advertencia = f"⚠️ ADVERTENCIA: Octanaje {octanaje_real:.1f} está muy cerca del límite inferior (98.0). Dentro de tolerancia industrial (±0.5), podría reclasificarse."
+    
+    # Clasificación
+    if octanaje_real < 95:
         return {
             'categoria': 'GASOLINA <95 OCTANOS',
             'codigo_nc': '2710.12.41',
@@ -169,9 +194,11 @@ def clasificar_gasolina(octanaje_redondeado):
             'descripcion': 'Inferior a 95 octanos',
             'emoji': '⚡',
             'clase': 'result-regular',
-            'imagen': '94.png'
+            'imagen': '94.png',
+            'advertencia': advertencia,
+            'limite_critico': limite_critico
         }
-    elif octanaje_redondeado <= 98:
+    elif octanaje_real <= 98:
         return {
             'categoria': 'GASOLINA 95 OCTANOS',
             'codigo_nc': '2710.12.45',
@@ -179,7 +206,9 @@ def clasificar_gasolina(octanaje_redondeado):
             'descripcion': '95 a 98 octanos',
             'emoji': '🚗',
             'clase': 'result-premium',
-            'imagen': '95.png'
+            'imagen': '95.png',
+            'advertencia': advertencia,
+            'limite_critico': limite_critico
         }
     else:  # > 98
         return {
@@ -189,7 +218,9 @@ def clasificar_gasolina(octanaje_redondeado):
             'descripcion': 'Superior a 98 octanos',
             'emoji': '🏎️',
             'clase': 'result-super',
-            'imagen': '98.png'
+            'imagen': '98.png',
+            'advertencia': advertencia,
+            'limite_critico': limite_critico
         }
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -303,6 +334,7 @@ with st.sidebar:
     # Botón de ejemplo
     if st.button("💡 Cargar Datos de Ejemplo", use_container_width=True):
         st.session_state.cargar_ejemplo = True
+        st.session_state.resultado = None
         st.rerun()
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -348,7 +380,8 @@ with tab1:
             max_value=100.0, 
             value=valores['PARAFINAS'], 
             step=0.1,
-            help="Rango típico: 5.5 - 16.2"
+            help="Rango típico: 5.5 - 16.2",
+            key="parafinas"
         )
         
         isoparafinas = st.number_input(
@@ -357,7 +390,8 @@ with tab1:
             max_value=100.0, 
             value=valores['ISOPARAFINAS'], 
             step=0.1,
-            help="Rango típico: 22.5 - 43.9"
+            help="Rango típico: 22.5 - 43.9",
+            key="isoparafinas"
         )
         
         olefinas = st.number_input(
@@ -366,7 +400,8 @@ with tab1:
             max_value=100.0, 
             value=valores['OLEFINAS'], 
             step=0.1,
-            help="Rango típico: 2.3 - 13.8"
+            help="Rango típico: 2.3 - 13.8",
+            key="olefinas"
         )
         
         naftenicos = st.number_input(
@@ -375,7 +410,8 @@ with tab1:
             max_value=100.0, 
             value=valores['NAFTENICOS'], 
             step=0.1,
-            help="Rango típico: 2.0 - 14.5"
+            help="Rango típico: 2.0 - 14.5",
+            key="naftenicos"
         )
     
     with col2:
@@ -386,7 +422,8 @@ with tab1:
             max_value=100.0, 
             value=valores['AROMATICOS'], 
             step=0.1,
-            help="Rango típico: 26.5 - 48.9"
+            help="Rango típico: 26.5 - 48.9",
+            key="aromaticos"
         )
         
         etanol = st.number_input(
@@ -395,7 +432,8 @@ with tab1:
             max_value=100.0, 
             value=valores['ETANOL'], 
             step=0.1,
-            help="Rango típico: 0.0 - 4.9"
+            help="Rango típico: 0.0 - 4.9",
+            key="etanol"
         )
         
         mtbe = st.number_input(
@@ -404,7 +442,8 @@ with tab1:
             max_value=100.0, 
             value=valores['MTBE'], 
             step=0.1,
-            help="Rango típico: 0.0 - 14.3"
+            help="Rango típico: 0.0 - 14.3",
+            key="mtbe"
         )
         
         etbe = st.number_input(
@@ -413,7 +452,8 @@ with tab1:
             max_value=100.0, 
             value=valores['ETBE'], 
             step=0.1,
-            help="Rango típico: 0.0 - 7.9"
+            help="Rango típico: 0.0 - 7.9",
+            key="etbe"
         )
     
     # Calcular Ox y suma total
@@ -448,9 +488,10 @@ with tab1:
     
     with col_btn2:
         if st.button("🔄 LIMPIAR RESULTADOS", use_container_width=True):
-            st.session_state.clear()
+            st.session_state.resultado = None
             st.rerun()
     
+    # PROCESAR CÁLCULO
     if calcular:
         # Preparar datos para predicción
         datos_prediccion = {
@@ -473,18 +514,35 @@ with tab1:
             octanaje_predicho = float(modelo.predict(df_input)[0])
             octanaje_redondeado = round(octanaje_predicho)
         
-        # Clasificar
-        clasificacion = clasificar_gasolina(octanaje_redondeado)
+        # Clasificar usando el valor REAL (con decimales), no el redondeado
+        clasificacion = clasificar_gasolina(octanaje_predicho)
         
-        # Mostrar resultado
+        # Guardar en session_state
+        st.session_state.resultado = {
+            'octanaje': octanaje_predicho,
+            'octanaje_redondeado': octanaje_redondeado,
+            'clasificacion': clasificacion,
+            'datos': datos_prediccion,
+            'suma_total': suma_total
+        }
+    
+    # MOSTRAR RESULTADO si existe
+    if st.session_state.resultado is not None:
+        resultado = st.session_state.resultado
+        octanaje_predicho = resultado['octanaje']
+        octanaje_redondeado = resultado['octanaje_redondeado']
+        clasificacion = resultado['clasificacion']
+        datos_prediccion = resultado['datos']
+        suma_total = resultado['suma_total']
+        
         st.markdown("---")
         st.markdown("## ✨ RESULTADO DE LA PREDICCIÓN")
         
-        # Mostrar imagen del coche correspondiente
+        # Mostrar imagen del coche correspondiente (MÁS PEQUEÑA)
         try:
             col_img1, col_img2, col_img3 = st.columns([1, 2, 1])
             with col_img2:
-                st.image(clasificacion['imagen'], use_column_width=True)
+                st.image(clasificacion['imagen'], width=400)  # ← IMAGEN MÁS PEQUEÑA
         except:
             pass  # Si no encuentra la imagen, continúa sin ella
         
@@ -518,6 +576,10 @@ with tab1:
             st.metric("Epígrafe Fiscal", clasificacion['epigrafe'])
         
         st.info(f"📝 **Descripción:** {clasificacion['descripcion']}")
+        
+        # Mostrar advertencia si está en límite crítico
+        if clasificacion['advertencia']:
+            st.warning(clasificacion['advertencia'])
         
         # Información adicional
         st.markdown("### 💡 Información Adicional")
@@ -628,23 +690,6 @@ with tab2:
     })
     
     st.bar_chart(importancia_data.set_index('Variable')['Importancia (%)'])
-    
-    st.markdown("---")
-    
-    st.markdown("### ⚙️ Arquitectura del Modelo")
-    
-    st.markdown("""
-    **Gradient Boosting** es un método de ensemble learning que combina múltiples árboles de decisión:
-    
-    1. **Inicialización:** Comienza con la media del octanaje (95.52)
-    2. **Iteración:** Para cada uno de los 200 árboles:
-       - Calcula los residuales (errores no explicados)
-       - Entrena un nuevo árbol para predecir estos residuales
-       - Añade la predicción multiplicada por el learning rate (0.05)
-    3. **Predicción final:** Suma ponderada de todos los árboles
-    
-    **Fórmula:** `ŷ = f₀ + 0.05 × Σ(árbol_i)`
-    """)
 
 # ═══════════════════════════════════════════════════════════════════════════
 # TAB 3: GUÍA DE USO
@@ -664,20 +709,6 @@ with tab3:
     💡 **Tip:** Puedes usar el botón "Cargar Datos de Ejemplo" en el panel lateral para ver un ejemplo.
     """)
     
-    st.markdown("### 📊 Variables Requeridas")
-    
-    variables_info = pd.DataFrame({
-        'Variable': ['PARAFINAS', 'ISOPARAFINAS', 'OLEFINAS', 'NAFTÉNICOS', 'AROMÁTICOS', 
-                     'ETANOL', 'MTBE', 'ETBE'],
-        'Unidad': ['%v/v'] * 8,
-        'Rango Típico': ['5.5 - 16.2', '22.5 - 43.9', '2.3 - 13.8', '2.0 - 14.5',
-                         '26.5 - 48.9', '0.0 - 4.9', '0.0 - 14.3', '0.0 - 7.9']
-    })
-    
-    st.dataframe(variables_info, use_container_width=True, hide_index=True)
-    
-    st.info("💡 **Ox (Oxigenados)** se calcula automáticamente como la suma de ETANOL + MTBE + ETBE")
-    
     st.markdown("### 📋 Interpretación de Resultados")
     
     st.markdown("""
@@ -695,45 +726,6 @@ with tab3:
     | < 95 | GASOLINA <95 OCTANOS ⚡ | 2710.12.41 | 1.2.2 |
     | 95-98 | GASOLINA 95 OCTANOS 🚗 | 2710.12.45 | 1.2.2 |
     | > 98 | GASOLINA 98 OCTANOS 🏎️ | 2710.12.49 | 1.2.1 |
-    """)
-    
-    st.markdown("### ⚠️ Advertencias y Validaciones")
-    
-    st.markdown("""
-    La aplicación valida automáticamente:
-    
-    - **Suma de componentes:** Debe estar cerca de 100% (±5% tolerancia)
-    - **Rangos de valores:** Los valores fuera de rangos típicos generan advertencias
-    - **Datos faltantes:** Todos los campos son obligatorios
-    
-    Si la suma se desvía significativamente de 100%, el modelo puede seguir prediciendo,
-    pero el resultado tendrá mayor incertidumbre.
-    """)
-    
-    st.markdown("### 💾 Exportar Resultados")
-    
-    st.markdown("""
-    Después de cada predicción, puedes descargar los resultados en formato CSV con:
-    
-    - Fecha y hora de la predicción
-    - Todos los valores de entrada
-    - Octanaje predicho y redondeado
-    - Clasificación fiscal completa
-    
-    Esto permite mantener un registro histórico de todas las predicciones realizadas.
-    """)
-    
-    st.markdown("### 🎯 Precisión del Modelo")
-    
-    st.markdown("""
-    El modelo ha sido entrenado y validado con los siguientes resultados:
-    
-    - **100% de exactitud** en clasificación regulatoria (criterio industrial ±0.5)
-    - **R² = 0.8365** en validación externa (83.65% de varianza explicada)
-    - **MAE = 0.3774** unidades (error absoluto medio menor que tolerancia industrial)
-    
-    Esto significa que el modelo tiene una **precisión equivalente al método experimental
-    de referencia (CFR Motor)** cuando se aplica el criterio de tolerancia industrial estándar.
     """)
 
 # ═══════════════════════════════════════════════════════════════════════════
