@@ -1,11 +1,11 @@
 """
 ╔═══════════════════════════════════════════════════════════════════════════╗
 ║              🤖 PREDICTOR DE OCTANAJE - STREAMLIT APP 🤖                  ║
-║                    Con Clasificación Fiscal Automática                    ║
+║         Con Google Sheets Integration y Generación de PDFs                ║
 ╚═══════════════════════════════════════════════════════════════════════════╝
 
 Aplicación Streamlit para predicción de octanaje en gasolina
-Versión: 2.0 - CORREGIDA
+Versión: 4.0 - Con Google Sheets y PDFs
 """
 
 import streamlit as st
@@ -13,6 +13,24 @@ import pickle
 import pandas as pd
 from datetime import datetime
 import os
+import io
+import zipfile
+
+# Importar módulo de generación de PDFs
+try:
+    from generar_pdf import generar_pdf_muestra, generar_pdf_batch
+    PDF_DISPONIBLE = True
+except ImportError:
+    PDF_DISPONIBLE = False
+    st.warning("⚠️ Módulo generar_pdf.py no encontrado. Funcionalidad de PDFs deshabilitada.")
+
+# Importar Google Sheets
+try:
+    import gspread
+    from google.oauth2.service_account import Credentials
+    GSHEETS_DISPONIBLE = True
+except ImportError:
+    GSHEETS_DISPONIBLE = False
 
 # ═══════════════════════════════════════════════════════════════════════════
 # CONFIGURACIÓN DE LA PÁGINA
@@ -31,6 +49,10 @@ st.set_page_config(
 # Inicializar session_state
 if 'resultado' not in st.session_state:
     st.session_state.resultado = None
+if 'datos_gsheets' not in st.session_state:
+    st.session_state.datos_gsheets = None
+if 'pdfs_generados' not in st.session_state:
+    st.session_state.pdfs_generados = []
 
 # ═══════════════════════════════════════════════════════════════════════════
 # CSS PERSONALIZADO
@@ -163,8 +185,6 @@ def clasificar_gasolina(octanaje_real):
     Returns:
         dict con información de clasificación y advertencias
     """
-    # IMPORTANTE: Clasificar con el valor REAL, no con el redondeado
-    
     # Detectar si está en zona crítica (límite ± tolerancia 0.5)
     advertencia = None
     limite_critico = None
@@ -224,6 +244,75 @@ def clasificar_gasolina(octanaje_real):
         }
 
 # ═══════════════════════════════════════════════════════════════════════════
+# FUNCIONES DE GOOGLE SHEETS
+# ═══════════════════════════════════════════════════════════════════════════
+
+@st.cache_resource
+def conectar_google_sheets():
+    """Conecta con Google Sheets usando credenciales."""
+    try:
+        # Intentar leer credenciales de Streamlit Secrets
+        if 'gcp_service_account' in st.secrets:
+            credentials = Credentials.from_service_account_info(
+                st.secrets["gcp_service_account"],
+                scopes=[
+                    'https://www.googleapis.com/auth/spreadsheets',
+                    'https://www.googleapis.com/auth/drive'
+                ]
+            )
+        # Alternativa: leer de archivo local (para desarrollo)
+        elif os.path.exists('credentials.json'):
+            credentials = Credentials.from_service_account_file(
+                'credentials.json',
+                scopes=[
+                    'https://www.googleapis.com/auth/spreadsheets',
+                    'https://www.googleapis.com/auth/drive'
+                ]
+            )
+        else:
+            return None, "No se encontraron credenciales de Google. Configura 'gcp_service_account' en Secrets."
+        
+        client = gspread.authorize(credentials)
+        return client, None
+    
+    except Exception as e:
+        return None, f"Error de conexión: {str(e)}"
+
+def leer_datos_sheet(sheet_id, sheet_name='Hoja1'):
+    """
+    Lee datos del Google Sheet.
+    
+    Args:
+        sheet_id: ID del Google Sheet
+        sheet_name: Nombre de la hoja (tab)
+    
+    Returns:
+        tuple: (DataFrame con los datos, mensaje de error o None)
+    """
+    try:
+        client, error = conectar_google_sheets()
+        if error:
+            return None, error
+        
+        # Abrir el sheet
+        sheet = client.open_by_key(sheet_id)
+        worksheet = sheet.worksheet(sheet_name)
+        
+        # Obtener todos los datos
+        datos = worksheet.get_all_records()
+        
+        if not datos:
+            return None, "El sheet está vacío o no tiene encabezados."
+        
+        # Convertir a DataFrame
+        df = pd.DataFrame(datos)
+        
+        return df, None
+    
+    except Exception as e:
+        return None, f"Error leyendo datos: {str(e)}"
+
+# ═══════════════════════════════════════════════════════════════════════════
 # CARGA DEL MODELO
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -231,7 +320,6 @@ def clasificar_gasolina(octanaje_real):
 def cargar_modelo():
     """Carga el modelo de predicción (con caché)."""
     try:
-        # Buscar el modelo en varias ubicaciones
         rutas_posibles = [
             'modelo_final_gb.pkl',
             './modelo_final_gb.pkl',
@@ -262,7 +350,6 @@ def cargar_modelo():
 try:
     st.image('banner.png', use_column_width=True)
 except:
-    # Si no encuentra la imagen, muestra el título normal
     st.markdown('<p class="main-header">🤖 Predictor de Octanaje ⛽</p>', unsafe_allow_html=True)
 
 st.markdown('<p class="subtitle">Sistema de predicción con clasificación fiscal automática | Precisión: 100% (±0.5)</p>', unsafe_allow_html=True)
@@ -288,7 +375,6 @@ with st.sidebar:
     
     st.markdown("### 📋 Categorías Fiscales")
     
-    # Categoría 1
     st.markdown("""
     <div class="categoria-box categoria-regular">
         <strong>⚡ GASOLINA <95 OCTANOS</strong><br>
@@ -298,7 +384,6 @@ with st.sidebar:
     </div>
     """, unsafe_allow_html=True)
     
-    # Categoría 2
     st.markdown("""
     <div class="categoria-box categoria-premium">
         <strong>🚗 GASOLINA 95 OCTANOS</strong><br>
@@ -308,7 +393,6 @@ with st.sidebar:
     </div>
     """, unsafe_allow_html=True)
     
-    # Categoría 3
     st.markdown("""
     <div class="categoria-box categoria-super">
         <strong>🏎️ GASOLINA 98 OCTANOS</strong><br>
@@ -331,7 +415,6 @@ with st.sidebar:
     
     st.divider()
     
-    # Botón de ejemplo
     if st.button("💡 Cargar Datos de Ejemplo", use_container_width=True):
         st.session_state.cargar_ejemplo = True
         st.session_state.resultado = None
@@ -341,17 +424,17 @@ with st.sidebar:
 # TABS PRINCIPALES
 # ═══════════════════════════════════════════════════════════════════════════
 
-tab1, tab2, tab3 = st.tabs(["🎯 Predicción", "📊 Modelo", "📖 Guía de Uso"])
+tab1, tab2, tab3, tab4 = st.tabs(["🎯 Predicción", "📊 Procesamiento por Lotes", "📋 Modelo", "📖 Guía"])
 
 # ═══════════════════════════════════════════════════════════════════════════
-# TAB 1: PREDICCIÓN
+# TAB 1: PREDICCIÓN INDIVIDUAL (código existente sin cambios)
 # ═══════════════════════════════════════════════════════════════════════════
 
 with tab1:
     st.markdown("## 📊 Análisis Cromatográfico")
     st.markdown("Introduce los valores obtenidos del análisis cromatográfico:")
     
-    # Determinar valores iniciales (ejemplo o cero)
+    # Determinar valores iniciales
     if 'cargar_ejemplo' in st.session_state and st.session_state.cargar_ejemplo:
         valores = {
             'PARAFINAS': 10.5,
@@ -374,96 +457,31 @@ with tab1:
     
     with col1:
         st.markdown("#### 🧪 Componentes Principales")
-        parafinas = st.number_input(
-            "**PARAFINAS** (%v/v)", 
-            min_value=0.0, 
-            max_value=100.0, 
-            value=valores['PARAFINAS'], 
-            step=0.1,
-            help="Rango típico: 5.5 - 16.2",
-            key="parafinas"
-        )
-        
-        isoparafinas = st.number_input(
-            "**ISOPARAFINAS** (%v/v)", 
-            min_value=0.0, 
-            max_value=100.0, 
-            value=valores['ISOPARAFINAS'], 
-            step=0.1,
-            help="Rango típico: 22.5 - 43.9",
-            key="isoparafinas"
-        )
-        
-        olefinas = st.number_input(
-            "**OLEFINAS** (%v/v)", 
-            min_value=0.0, 
-            max_value=100.0, 
-            value=valores['OLEFINAS'], 
-            step=0.1,
-            help="Rango típico: 2.3 - 13.8",
-            key="olefinas"
-        )
-        
-        naftenicos = st.number_input(
-            "**NAFTÉNICOS** (%v/v)", 
-            min_value=0.0, 
-            max_value=100.0, 
-            value=valores['NAFTENICOS'], 
-            step=0.1,
-            help="Rango típico: 2.0 - 14.5",
-            key="naftenicos"
-        )
+        parafinas = st.number_input("**PARAFINAS** (%v/v)", min_value=0.0, max_value=100.0, 
+                                     value=valores['PARAFINAS'], step=0.1, help="Rango típico: 5.5 - 16.2", key="parafinas")
+        isoparafinas = st.number_input("**ISOPARAFINAS** (%v/v)", min_value=0.0, max_value=100.0, 
+                                        value=valores['ISOPARAFINAS'], step=0.1, help="Rango típico: 22.5 - 43.9", key="isoparafinas")
+        olefinas = st.number_input("**OLEFINAS** (%v/v)", min_value=0.0, max_value=100.0, 
+                                    value=valores['OLEFINAS'], step=0.1, help="Rango típico: 2.3 - 13.8", key="olefinas")
+        naftenicos = st.number_input("**NAFTÉNICOS** (%v/v)", min_value=0.0, max_value=100.0, 
+                                      value=valores['NAFTENICOS'], step=0.1, help="Rango típico: 2.0 - 14.5", key="naftenicos")
     
     with col2:
         st.markdown("#### 🧪 Aromáticos y Oxigenados")
-        aromaticos = st.number_input(
-            "**AROMÁTICOS** (%v/v)", 
-            min_value=0.0, 
-            max_value=100.0, 
-            value=valores['AROMATICOS'], 
-            step=0.1,
-            help="Rango típico: 26.5 - 48.9",
-            key="aromaticos"
-        )
-        
-        etanol = st.number_input(
-            "**ETANOL** (%v/v)", 
-            min_value=0.0, 
-            max_value=100.0, 
-            value=valores['ETANOL'], 
-            step=0.1,
-            help="Rango típico: 0.0 - 4.9",
-            key="etanol"
-        )
-        
-        mtbe = st.number_input(
-            "**MTBE** (%v/v)", 
-            min_value=0.0, 
-            max_value=100.0, 
-            value=valores['MTBE'], 
-            step=0.1,
-            help="Rango típico: 0.0 - 14.3",
-            key="mtbe"
-        )
-        
-        etbe = st.number_input(
-            "**ETBE** (%v/v)", 
-            min_value=0.0, 
-            max_value=100.0, 
-            value=valores['ETBE'], 
-            step=0.1,
-            help="Rango típico: 0.0 - 7.9",
-            key="etbe"
-        )
+        aromaticos = st.number_input("**AROMÁTICOS** (%v/v)", min_value=0.0, max_value=100.0, 
+                                      value=valores['AROMATICOS'], step=0.1, help="Rango típico: 26.5 - 48.9", key="aromaticos")
+        etanol = st.number_input("**ETANOL** (%v/v)", min_value=0.0, max_value=100.0, 
+                                 value=valores['ETANOL'], step=0.1, help="Rango típico: 0.0 - 4.9", key="etanol")
+        mtbe = st.number_input("**MTBE** (%v/v)", min_value=0.0, max_value=100.0, 
+                               value=valores['MTBE'], step=0.1, help="Rango típico: 0.0 - 14.3", key="mtbe")
+        etbe = st.number_input("**ETBE** (%v/v)", min_value=0.0, max_value=100.0, 
+                               value=valores['ETBE'], step=0.1, help="Rango típico: 0.0 - 7.9", key="etbe")
     
-    # Calcular Ox y suma total
     ox = etanol + mtbe + etbe
     suma_total = parafinas + isoparafinas + olefinas + naftenicos + aromaticos + ox
     
-    # Mostrar resumen antes de calcular
     st.markdown("### 📈 Resumen de Componentes")
     col1, col2, col3 = st.columns(3)
-    
     with col1:
         st.metric("Oxigenados totales (Ox)", f"{ox:.2f}%")
     with col2:
@@ -474,50 +492,33 @@ with tab1:
         else:
             st.metric("✅ Suma válida", "OK", delta_color="normal")
     
-    # Advertencia si la suma se desvía mucho
     if abs(suma_total - 100) > 5:
         st.warning(f"⚠️ **Advertencia:** La suma de componentes es {suma_total:.1f}% (debería estar cerca de 100%)")
     
     st.markdown("---")
     
-    # Botones de calcular y limpiar
     col_btn1, col_btn2 = st.columns(2)
-    
     with col_btn1:
         calcular = st.button("🎯 CALCULAR OCTANAJE", type="primary", use_container_width=True)
-    
     with col_btn2:
         if st.button("🔄 LIMPIAR RESULTADOS", use_container_width=True):
             st.session_state.resultado = None
             st.rerun()
     
-    # PROCESAR CÁLCULO
     if calcular:
-        # Preparar datos para predicción
         datos_prediccion = {
-            'PARAFINAS': parafinas,
-            'ISOPARAFINAS': isoparafinas,
-            'OLEFINAS': olefinas,
-            'NAFTENICOS': naftenicos,
-            'AROMATICOS': aromaticos,
-            'ETANOL': etanol,
-            'MTBE': mtbe,
-            'ETBE': etbe,
-            'Ox': ox
+            'PARAFINAS': parafinas, 'ISOPARAFINAS': isoparafinas, 'OLEFINAS': olefinas,
+            'NAFTENICOS': naftenicos, 'AROMATICOS': aromaticos, 'ETANOL': etanol,
+            'MTBE': mtbe, 'ETBE': etbe, 'Ox': ox
         }
-        
-        # Crear DataFrame
         df_input = pd.DataFrame([datos_prediccion])[variables]
         
-        # PREDECIR
         with st.spinner("🔮 Calculando octanaje..."):
             octanaje_predicho = float(modelo.predict(df_input)[0])
             octanaje_redondeado = round(octanaje_predicho)
         
-        # Clasificar usando el valor REAL (con decimales), no el redondeado
         clasificacion = clasificar_gasolina(octanaje_predicho)
         
-        # Guardar en session_state
         st.session_state.resultado = {
             'octanaje': octanaje_predicho,
             'octanaje_redondeado': octanaje_redondeado,
@@ -526,27 +527,22 @@ with tab1:
             'suma_total': suma_total
         }
     
-    # MOSTRAR RESULTADO si existe
     if st.session_state.resultado is not None:
         resultado = st.session_state.resultado
         octanaje_predicho = resultado['octanaje']
         octanaje_redondeado = resultado['octanaje_redondeado']
         clasificacion = resultado['clasificacion']
-        datos_prediccion = resultado['datos']
-        suma_total = resultado['suma_total']
         
         st.markdown("---")
         st.markdown("## ✨ RESULTADO DE LA PREDICCIÓN")
         
-        # Mostrar imagen del coche correspondiente (MÁS PEQUEÑA)
         try:
             col_img1, col_img2, col_img3 = st.columns([1, 2, 1])
             with col_img2:
-                st.image(clasificacion['imagen'], width=400)  # ← IMAGEN MÁS PEQUEÑA
+                st.image(clasificacion['imagen'], width=400)
         except:
-            pass  # Si no encuentra la imagen, continúa sin ella
+            pass
         
-        # Caja de resultado con estilo según categoría
         resultado_html = f"""
         <div class="result-box {clasificacion['clase']}">
             <div class="emoji-large">{clasificacion['emoji']}</div>
@@ -561,85 +557,214 @@ with tab1:
         """
         st.markdown(resultado_html, unsafe_allow_html=True)
         
-        # Clasificación Fiscal
         st.markdown("### 📋 Clasificación Fiscal")
-        
         col1, col2, col3 = st.columns(3)
-        
         with col1:
             st.metric("Categoría", clasificacion['categoria'])
-        
         with col2:
             st.metric("Código NC", clasificacion['codigo_nc'])
-        
         with col3:
             st.metric("Epígrafe Fiscal", clasificacion['epigrafe'])
         
         st.info(f"📝 **Descripción:** {clasificacion['descripcion']}")
         
-        # Mostrar advertencia si está en límite crítico
-        if clasificacion['advertencia']:
+        if clasificacion.get('advertencia'):
             st.warning(clasificacion['advertencia'])
         
-        # Información adicional
-        st.markdown("### 💡 Información Adicional")
-        
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            st.metric("Componentes Principales", f"{parafinas + isoparafinas + aromaticos:.1f}%")
-        
-        with col2:
-            st.metric("Oxigenados Totales", f"{ox:.2f}%")
-        
-        with col3:
-            st.metric("Suma Total", f"{suma_total:.1f}%")
-        
-        # Timestamp
-        st.caption(f"🕐 Predicción realizada: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        
-        # Opción de descargar datos
         st.markdown("### 💾 Exportar Resultado")
-        
         datos_exportar = {
             'Fecha_Hora': [datetime.now().strftime('%Y-%m-%d %H:%M:%S')],
-            'PARAFINAS': [parafinas],
-            'ISOPARAFINAS': [isoparafinas],
-            'OLEFINAS': [olefinas],
-            'NAFTENICOS': [naftenicos],
-            'AROMATICOS': [aromaticos],
-            'ETANOL': [etanol],
-            'MTBE': [mtbe],
-            'ETBE': [etbe],
-            'Ox': [ox],
+            'PARAFINAS': [parafinas], 'ISOPARAFINAS': [isoparafinas], 'OLEFINAS': [olefinas],
+            'NAFTENICOS': [naftenicos], 'AROMATICOS': [aromaticos], 'ETANOL': [etanol],
+            'MTBE': [mtbe], 'ETBE': [etbe], 'Ox': [ox],
             'Octanaje_Predicho': [round(octanaje_predicho, 1)],
             'Octanaje_Redondeado': [octanaje_redondeado],
             'Categoria': [clasificacion['categoria']],
             'Codigo_NC': [clasificacion['codigo_nc']],
             'Epigrafe': [clasificacion['epigrafe']]
         }
-        
         df_exportar = pd.DataFrame(datos_exportar)
-        
         csv = df_exportar.to_csv(index=False).encode('utf-8')
-        
-        st.download_button(
-            label="📥 Descargar resultado en CSV",
-            data=csv,
-            file_name=f'prediccion_octanaje_{datetime.now().strftime("%Y%m%d_%H%M%S")}.csv',
-            mime='text/csv',
-            use_container_width=True
-        )
+        st.download_button("📥 Descargar resultado en CSV", data=csv,
+                          file_name=f'prediccion_octanaje_{datetime.now().strftime("%Y%m%d_%H%M%S")}.csv',
+                          mime='text/csv', use_container_width=True)
 
 # ═══════════════════════════════════════════════════════════════════════════
-# TAB 2: INFORMACIÓN DEL MODELO
+# TAB 2: PROCESAMIENTO POR LOTES (NUEVA FUNCIONALIDAD)
 # ═══════════════════════════════════════════════════════════════════════════
 
 with tab2:
-    st.markdown("## 📊 Información del Modelo")
+    st.markdown("## 📊 Procesamiento por Lotes desde Google Sheets")
     
+    if not GSHEETS_DISPONIBLE:
+        st.error("❌ **Error:** Librerías de Google Sheets no instaladas.")
+        st.info("Añade a requirements.txt: gspread, google-auth, google-auth-oauthlib")
+        st.stop()
+    
+    st.markdown("### ⚙️ Configuración")
+    
+    # Configuración del Sheet
     col1, col2 = st.columns(2)
     
+    with col1:
+        sheet_id = st.text_input(
+            "🔑 ID del Google Sheet",
+            value=st.secrets.get("google_sheets", {}).get("sheet_id", ""),
+            help="Ej: 1xYz_ABCD1234567890 (se encuentra en la URL del Sheet)",
+            key="sheet_id_input"
+        )
+    
+    with col2:
+        sheet_name = st.text_input(
+            "📄 Nombre de la Hoja",
+            value=st.secrets.get("google_sheets", {}).get("sheet_name", "Hoja1"),
+            help="Nombre del tab en el Google Sheet",
+            key="sheet_name_input"
+        )
+    
+    # Botón para leer datos
+    if st.button("📥 LEER DATOS DEL SHEET", type="primary", use_container_width=True):
+        if not sheet_id:
+            st.error("❌ Por favor, proporciona el ID del Google Sheet")
+        else:
+            with st.spinner("🔄 Conectando con Google Sheets..."):
+                df, error = leer_datos_sheet(sheet_id, sheet_name)
+                
+                if error:
+                    st.error(f"❌ Error: {error}")
+                    st.info("💡 Verifica que:\n- Las credenciales están configuradas en Secrets\n- El Sheet está compartido con la cuenta de servicio\n- El nombre de la hoja es correcto")
+                else:
+                    st.session_state.datos_gsheets = df
+                    st.success(f"✅ Datos leídos correctamente: {len(df)} filas")
+    
+    # Mostrar datos si existen
+    if st.session_state.datos_gsheets is not None:
+        df = st.session_state.datos_gsheets
+        
+        st.markdown("### 📋 Vista Previa de Datos")
+        st.dataframe(df.head(10), use_container_width=True)
+        st.caption(f"Mostrando primeras 10 filas de {len(df)} totales")
+        
+        st.markdown("### 🎯 Procesar Muestras")
+        
+        # Verificar que las columnas necesarias existen
+        columnas_necesarias = ['P', 'I', 'O', 'N', 'A', 'E', 'MT', 'ET']
+        columnas_faltantes = [col for col in columnas_necesarias if col not in df.columns]
+        
+        if columnas_faltantes:
+            st.error(f"❌ Faltan columnas: {', '.join(columnas_faltantes)}")
+            st.info("Las columnas deben llamarse: MUESTRA, P, I, O, N, A, E, MT, ET, OX")
+        else:
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("🚀 PROCESAR Y GENERAR PDFs", type="primary", use_container_width=True):
+                    if not PDF_DISPONIBLE:
+                        st.error("❌ Módulo generar_pdf.py no disponible")
+                    else:
+                        with st.spinner(f"🔮 Procesando {len(df)} muestras..."):
+                            resultados = []
+                            
+                            progress_bar = st.progress(0)
+                            status_text = st.empty()
+                            
+                            for idx, fila in df.iterrows():
+                                status_text.text(f"Procesando muestra {idx+1}/{len(df)}...")
+                                progress_bar.progress((idx + 1) / len(df))
+                                
+                                # Preparar datos
+                                datos_muestra = {
+                                    'muestra': str(fila.get('MUESTRA', f'Muestra_{idx+1}')),
+                                    'parafinas': float(fila['P']),
+                                    'isoparafinas': float(fila['I']),
+                                    'olefinas': float(fila['O']),
+                                    'naftenicos': float(fila['N']),
+                                    'aromaticos': float(fila['A']),
+                                    'etanol': float(fila['E']),
+                                    'mtbe': float(fila['MT']),
+                                    'etbe': float(fila['ET']),
+                                    'ox': float(fila.get('OX', fila['E'] + fila['MT'] + fila['ET'])),
+                                    'fecha': datetime.now().strftime('%Y-%m-%d'),
+                                    'comentarios': fila.get('COMENTARIOS', '')
+                                }
+                                
+                                # Predecir
+                                df_pred = pd.DataFrame([{
+                                    'PARAFINAS': datos_muestra['parafinas'],
+                                    'ISOPARAFINAS': datos_muestra['isoparafinas'],
+                                    'OLEFINAS': datos_muestra['olefinas'],
+                                    'NAFTENICOS': datos_muestra['naftenicos'],
+                                    'AROMATICOS': datos_muestra['aromaticos'],
+                                    'ETANOL': datos_muestra['etanol'],
+                                    'MTBE': datos_muestra['mtbe'],
+                                    'ETBE': datos_muestra['etbe'],
+                                    'Ox': datos_muestra['ox']
+                                }])[variables]
+                                
+                                octanaje = float(modelo.predict(df_pred)[0])
+                                clasificacion = clasificar_gasolina(octanaje)
+                                
+                                resultado_prediccion = {
+                                    'octanaje': octanaje,
+                                    'octanaje_redondeado': round(octanaje),
+                                    'categoria': clasificacion['categoria'],
+                                    'codigo_nc': clasificacion['codigo_nc'],
+                                    'epigrafe': clasificacion['epigrafe'],
+                                    'advertencia': clasificacion.get('advertencia', None)
+                                }
+                                
+                                # Generar PDF
+                                nombre_pdf = f"Informe_{datos_muestra['muestra'].replace(' ', '_')}.pdf"
+                                ruta_pdf = generar_pdf_muestra(datos_muestra, resultado_prediccion, nombre_pdf)
+                                
+                                resultados.append({
+                                    'muestra': datos_muestra['muestra'],
+                                    'octanaje': octanaje,
+                                    'categoria': clasificacion['categoria'],
+                                    'pdf_path': ruta_pdf
+                                })
+                            
+                            progress_bar.empty()
+                            status_text.empty()
+                            
+                            st.session_state.pdfs_generados = resultados
+                            st.success(f"✅ {len(resultados)} PDFs generados correctamente")
+            
+            with col2:
+                if st.button("🔄 LIMPIAR", use_container_width=True):
+                    st.session_state.datos_gsheets = None
+                    st.session_state.pdfs_generados = []
+                    st.rerun()
+            
+            # Mostrar resultados
+            if st.session_state.pdfs_generados:
+                st.markdown("### 📥 Descargar PDFs")
+                
+                st.dataframe(
+                    pd.DataFrame(st.session_state.pdfs_generados)[['muestra', 'octanaje', 'categoria']],
+                    use_container_width=True
+                )
+                
+                # Crear ZIP con todos los PDFs
+                zip_buffer = io.BytesIO()
+                with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+                    for resultado in st.session_state.pdfs_generados:
+                        if os.path.exists(resultado['pdf_path']):
+                            zip_file.write(resultado['pdf_path'], os.path.basename(resultado['pdf_path']))
+                
+                zip_buffer.seek(0)
+                
+                st.download_button(
+                    "📦 DESCARGAR TODOS LOS PDFs (ZIP)",
+                    data=zip_buffer.getvalue(),
+                    file_name=f"Informes_Octanaje_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip",
+                    mime="application/zip",
+                    use_container_width=True
+                )
+
+# TAB 3 y TAB 4: Información del modelo y guía (código existente sin cambios)
+with tab3:
+    st.markdown("## 📊 Información del Modelo")
+    col1, col2 = st.columns(2)
     with col1:
         st.markdown("### 🎯 Especificaciones Técnicas")
         st.markdown("""
@@ -650,95 +775,28 @@ with tab2:
         - **Subsample:** 0.8 (80% de datos)
         - **Variables de entrada:** 9 (8 medidas + Ox calculado)
         """)
-        
-        st.markdown("### 📈 Datos de Entrenamiento")
-        st.markdown("""
-        - **Muestras de entrenamiento:** 90
-        - **Muestras de validación:** 77 (independientes)
-        - **Rango de octanaje:** 92.9 - 99.0 RON
-        """)
-    
-    with col2:
-        st.markdown("### 📊 Métricas de Desempeño")
-        
-        metricas_col1, metricas_col2 = st.columns(2)
-        
-        with metricas_col1:
-            st.metric("R² Entrenamiento", "99.96%")
-            st.metric("R² Validación", "83.65%")
-        
-        with metricas_col2:
-            st.metric("MAE", "0.3774")
-            st.metric("RMSE", "0.5260")
-        
-        st.success("✅ **Exactitud clasificación:** 100% (criterio industrial ±0.5)")
-    
-    st.markdown("---")
-    
-    st.markdown("### 🔝 Importancia de Variables")
-    
-    st.markdown("""
-    Las variables están ordenadas por su contribución a la predicción del octanaje.
-    Las 3 primeras explican el **89.2%** del comportamiento total.
-    """)
-    
-    # Gráfico de importancia
-    importancia_data = pd.DataFrame({
-        'Variable': ['PARAFINAS', 'Ox (Oxigenados)', 'NAFTÉNICOS', 'OLEFINAS', 
-                     'AROMÁTICOS', 'ISOPARAFINAS', 'ETANOL', 'MTBE', 'ETBE'],
-        'Importancia (%)': [40.3, 32.1, 16.8, 4.0, 3.1, 1.6, 1.2, 0.7, 0.2]
-    })
-    
-    st.bar_chart(importancia_data.set_index('Variable')['Importancia (%)'])
 
-# ═══════════════════════════════════════════════════════════════════════════
-# TAB 3: GUÍA DE USO
-# ═══════════════════════════════════════════════════════════════════════════
-
-with tab3:
+with tab4:
     st.markdown("## 📖 Guía de Uso")
-    
-    st.markdown("### 🚀 Inicio Rápido")
-    
     st.markdown("""
-    1. **Obtén los datos** del análisis cromatográfico de tu muestra de gasolina
-    2. **Introduce los valores** en el formulario de la pestaña "Predicción"
-    3. **Haz clic** en "CALCULAR OCTANAJE"
-    4. **Obtén el resultado** con clasificación fiscal automática
+    ### 🚀 Predicción Individual
+    1. Introduce los valores del análisis cromatográfico
+    2. Haz clic en "CALCULAR OCTANAJE"
+    3. Obtén el resultado con clasificación fiscal
     
-    💡 **Tip:** Puedes usar el botón "Cargar Datos de Ejemplo" en el panel lateral para ver un ejemplo.
-    """)
-    
-    st.markdown("### 📋 Interpretación de Resultados")
-    
-    st.markdown("""
-    El modelo proporciona:
-    
-    - **Octanaje predicho:** Valor con 1 decimal (ej: 96.2 RON)
-    - **Octanaje redondeado:** Valor entero usado para clasificación (ej: 96 RON)
-    - **Intervalo de confianza:** Rango ±0.5 unidades (tolerancia industrial)
-    - **Clasificación fiscal:** Categoría, Código NC y Epígrafe automáticos
-    
-    Las 3 categorías fiscales son:
-    
-    | Octanaje | Categoría | Código NC | Epígrafe |
-    |----------|-----------|-----------|----------|
-    | < 95 | GASOLINA <95 OCTANOS ⚡ | 2710.12.41 | 1.2.2 |
-    | 95-98 | GASOLINA 95 OCTANOS 🚗 | 2710.12.45 | 1.2.2 |
-    | > 98 | GASOLINA 98 OCTANOS 🏎️ | 2710.12.49 | 1.2.1 |
+    ### 📊 Procesamiento por Lotes
+    1. Configura el ID de tu Google Sheet
+    2. Haz clic en "LEER DATOS DEL SHEET"
+    3. Verifica los datos en la vista previa
+    4. Haz clic en "PROCESAR Y GENERAR PDFs"
+    5. Descarga los PDFs individuales o el ZIP completo
     """)
 
-# ═══════════════════════════════════════════════════════════════════════════
-# FOOTER
-# ═══════════════════════════════════════════════════════════════════════════
-
+# Footer
 st.markdown("---")
 st.markdown("""
 <div style='text-align: center; color: #666; padding: 20px;'>
     <p><strong>🤖 Sistema de Predicción de Octanaje con Machine Learning</strong></p>
-    <p>Modelo: Gradient Boosting Regressor | R² = 0.8365 | Precisión: 100% (±0.5)</p>
-    <p style='font-size: 0.9rem; margin-top: 10px;'>
-        Desarrollado para clasificación fiscal de gasolina según normativa española
-    </p>
+    <p>Versión 4.0 | Modelo: Gradient Boosting | R² = 0.8365 | Precisión: 100% (±0.5)</p>
 </div>
 """, unsafe_allow_html=True)
