@@ -193,17 +193,17 @@ def clasificar_gasolina(octanaje_real):
     if 94.5 <= octanaje_real <= 95.5:
         limite_critico = 95.0
         if octanaje_real < 95:
-            advertencia = f"⚠️ ADVERTENCIA: Octanaje {octanaje_real:.1f} está muy cerca del límite inferior (95.0). Dentro de tolerancia industrial (±0.5), podría reclasificarse."
+            advertencia = f"⚠️ Octanaje {octanaje_real:.1f} cerca de límite 95.0. Tolerancia ±0.5 puede reclasificar."
         else:
-            advertencia = f"⚠️ ADVERTENCIA: Octanaje {octanaje_real:.1f} está muy cerca del límite superior (95.0). Dentro de tolerancia industrial (±0.5), podría reclasificarse."
+            advertencia = f"⚠️ Octanaje {octanaje_real:.1f} cerca de límite 95.0. Tolerancia ±0.5 puede reclasificar."
     
     # Límite crítico en 98.0 (rango de advertencia: 97.5 - 98.5)
     elif 97.5 <= octanaje_real <= 98.5:
         limite_critico = 98.0
         if octanaje_real <= 98:
-            advertencia = f"⚠️ ADVERTENCIA: Octanaje {octanaje_real:.1f} está muy cerca del límite superior (98.0). Dentro de tolerancia industrial (±0.5), podría reclasificarse."
+            advertencia = f"⚠️ Octanaje {octanaje_real:.1f} cerca de límite 98.0. Tolerancia ±0.5 puede reclasificar."
         else:
-            advertencia = f"⚠️ ADVERTENCIA: Octanaje {octanaje_real:.1f} está muy cerca del límite inferior (98.0). Dentro de tolerancia industrial (±0.5), podría reclasificarse."
+            advertencia = f"⚠️ Octanaje {octanaje_real:.1f} cerca de límite 98.0. Tolerancia ±0.5 puede reclasificar."
     
     # Clasificación
     if octanaje_real < 95:
@@ -280,7 +280,7 @@ def conectar_google_sheets():
 
 def leer_datos_sheet(sheet_id, sheet_name='Hoja1'):
     """
-    Lee datos del Google Sheet.
+    Lee datos del Google Sheet y convierte comas decimales a puntos.
     
     Args:
         sheet_id: ID del Google Sheet
@@ -307,10 +307,95 @@ def leer_datos_sheet(sheet_id, sheet_name='Hoja1'):
         # Convertir a DataFrame
         df = pd.DataFrame(datos)
         
+        # Convertir comas a puntos en columnas numéricas
+        columnas_numericas = ['P', 'I', 'O', 'N', 'A', 'E', 'MT', 'ET', 'OX']
+        for col in columnas_numericas:
+            if col in df.columns:
+                # Convertir a string, reemplazar coma por punto, convertir a float
+                df[col] = df[col].astype(str).str.replace(',', '.').astype(float)
+        
         return df, None
     
     except Exception as e:
         return None, f"Error leyendo datos: {str(e)}"
+
+def escribir_octanaje_en_sheet(sheet_id, sheet_name, fila, octanaje):
+    """
+    Escribe el octanaje calculado en la columna M del Google Sheet.
+    
+    Args:
+        sheet_id: ID del Google Sheet
+        sheet_name: Nombre de la hoja
+        fila: Número de fila (1-indexed, incluyendo encabezado)
+        octanaje: Valor de octanaje a escribir
+    
+    Returns:
+        tuple: (True/False, mensaje)
+    """
+    try:
+        client, error = conectar_google_sheets()
+        if error:
+            return False, error
+        
+        sheet = client.open_by_key(sheet_id)
+        worksheet = sheet.worksheet(sheet_name)
+        
+        # Escribir en columna M (índice 13)
+        # fila + 1 porque la fila 1 es el encabezado
+        worksheet.update_cell(fila + 2, 13, round(octanaje, 1))
+        
+        return True, "Octanaje escrito correctamente"
+    
+    except Exception as e:
+        return False, f"Error escribiendo en Sheet: {str(e)}"
+
+def subir_pdf_a_drive(pdf_path, folder_id=None):
+    """
+    Sube un PDF a Google Drive.
+    
+    Args:
+        pdf_path: Ruta del archivo PDF local
+        folder_id: ID de la carpeta de Drive (opcional)
+    
+    Returns:
+        tuple: (URL del archivo o None, mensaje)
+    """
+    try:
+        from googleapiclient.discovery import build
+        from googleapiclient.http import MediaFileUpload
+        
+        client, error = conectar_google_sheets()
+        if error:
+            return None, error
+        
+        # Usar las mismas credenciales para Drive API
+        if 'gcp_service_account' in st.secrets:
+            from google.oauth2.service_account import Credentials
+            credentials = Credentials.from_service_account_info(
+                st.secrets["gcp_service_account"],
+                scopes=['https://www.googleapis.com/auth/drive.file']
+            )
+        else:
+            return None, "No se encontraron credenciales"
+        
+        service = build('drive', 'v3', credentials=credentials)
+        
+        file_metadata = {'name': os.path.basename(pdf_path)}
+        if folder_id:
+            file_metadata['parents'] = [folder_id]
+        
+        media = MediaFileUpload(pdf_path, mimetype='application/pdf')
+        
+        file = service.files().create(
+            body=file_metadata,
+            media_body=media,
+            fields='id, webViewLink'
+        ).execute()
+        
+        return file.get('webViewLink'), f"PDF subido correctamente: {file.get('webViewLink')}"
+    
+    except Exception as e:
+        return None, f"Error subiendo a Drive: {str(e)}"
 
 # ═══════════════════════════════════════════════════════════════════════════
 # CARGA DEL MODELO
@@ -642,10 +727,10 @@ with tab2:
         df = st.session_state.datos_gsheets
         
         st.markdown("### 📋 Vista Previa de Datos")
-        st.dataframe(df.head(10), use_container_width=True)
-        st.caption(f"Mostrando primeras 10 filas de {len(df)} totales")
         
-        st.markdown("### 🎯 Procesar Muestras")
+        # Mostrar TODAS las filas con scroll
+        st.dataframe(df, use_container_width=True, height=400)
+        st.caption(f"Mostrando todas las {len(df)} filas")
         
         # Verificar que las columnas necesarias existen
         columnas_necesarias = ['P', 'I', 'O', 'N', 'A', 'E', 'MT', 'ET']
@@ -655,21 +740,99 @@ with tab2:
             st.error(f"❌ Faltan columnas: {', '.join(columnas_faltantes)}")
             st.info("Las columnas deben llamarse: MUESTRA, P, I, O, N, A, E, MT, ET, OX")
         else:
+            st.markdown("### 🎯 Seleccionar Muestras a Procesar")
+            
+            # Radio button para seleccionar modo
+            modo_seleccion = st.radio(
+                "¿Qué muestras quieres procesar?",
+                ["Todas las filas", "Una fila específica", "Rango de filas"],
+                horizontal=True
+            )
+            
+            filas_a_procesar = []
+            
+            if modo_seleccion == "Todas las filas":
+                filas_a_procesar = list(range(len(df)))
+                st.info(f"📊 Se procesarán todas las {len(df)} muestras")
+            
+            elif modo_seleccion == "Una fila específica":
+                col1, col2 = st.columns([3, 1])
+                with col1:
+                    fila_especifica = st.number_input(
+                        "Número de fila (1 = primera fila de datos)",
+                        min_value=1,
+                        max_value=len(df),
+                        value=1,
+                        step=1
+                    )
+                with col2:
+                    st.metric("Muestra", df.iloc[fila_especifica-1].get('MUESTRA', f'Fila {fila_especifica}'))
+                
+                filas_a_procesar = [fila_especifica - 1]
+                st.info(f"📊 Se procesará 1 muestra: fila {fila_especifica}")
+            
+            elif modo_seleccion == "Rango de filas":
+                col1, col2 = st.columns(2)
+                with col1:
+                    fila_inicio = st.number_input(
+                        "Fila inicial",
+                        min_value=1,
+                        max_value=len(df),
+                        value=1,
+                        step=1
+                    )
+                with col2:
+                    fila_fin = st.number_input(
+                        "Fila final",
+                        min_value=1,
+                        max_value=len(df),
+                        value=min(10, len(df)),
+                        step=1
+                    )
+                
+                if fila_inicio > fila_fin:
+                    st.error("❌ La fila inicial debe ser menor o igual que la fila final")
+                else:
+                    filas_a_procesar = list(range(fila_inicio - 1, fila_fin))
+                    st.info(f"📊 Se procesarán {len(filas_a_procesar)} muestras (filas {fila_inicio} a {fila_fin})")
+            
+            st.markdown("---")
+            
+            # Opciones adicionales
+            col1, col2 = st.columns(2)
+            with col1:
+                escribir_en_sheet = st.checkbox("✍️ Escribir octanaje en columna M del Sheet", value=True)
+            with col2:
+                subir_a_drive = st.checkbox("☁️ Subir PDFs a Google Drive", value=False)
+            
+            if subir_a_drive:
+                folder_id_drive = st.text_input(
+                    "ID de carpeta de Drive (opcional)",
+                    help="Deja vacío para subir a la raíz. ID se ve en la URL de la carpeta.",
+                    key="folder_drive"
+                )
+            else:
+                folder_id_drive = None
+            
+            st.markdown("---")
+            
+            # Botones de acción
             col1, col2 = st.columns(2)
             with col1:
                 if st.button("🚀 PROCESAR Y GENERAR PDFs", type="primary", use_container_width=True):
                     if not PDF_DISPONIBLE:
                         st.error("❌ Módulo generar_pdf.py no disponible")
                     else:
-                        with st.spinner(f"🔮 Procesando {len(df)} muestras..."):
+                        with st.spinner(f"🔮 Procesando {len(filas_a_procesar)} muestras..."):
                             resultados = []
                             
                             progress_bar = st.progress(0)
                             status_text = st.empty()
                             
-                            for idx, fila in df.iterrows():
-                                status_text.text(f"Procesando muestra {idx+1}/{len(df)}...")
-                                progress_bar.progress((idx + 1) / len(df))
+                            for i, idx in enumerate(filas_a_procesar):
+                                fila = df.iloc[idx]
+                                status_text.text(f"Procesando muestra {i+1}/{len(filas_a_procesar)}...")
+                                progress_bar.progress((i + 1) / len(filas_a_procesar))
                                 
                                 # Preparar datos
                                 datos_muestra = {
@@ -716,18 +879,39 @@ with tab2:
                                 nombre_pdf = f"Informe_{datos_muestra['muestra'].replace(' ', '_')}.pdf"
                                 ruta_pdf = generar_pdf_muestra(datos_muestra, resultado_prediccion, nombre_pdf)
                                 
+                                # Escribir en Sheet si está activado
+                                if escribir_en_sheet:
+                                    exito, msg = escribir_octanaje_en_sheet(sheet_id, sheet_name, idx, octanaje)
+                                    if not exito:
+                                        st.warning(f"⚠️ No se pudo escribir en Sheet fila {idx+1}: {msg}")
+                                
+                                # Subir a Drive si está activado
+                                drive_url = None
+                                if subir_a_drive:
+                                    drive_url, msg = subir_pdf_a_drive(ruta_pdf, folder_id_drive)
+                                    if not drive_url:
+                                        st.warning(f"⚠️ No se pudo subir a Drive: {msg}")
+                                
                                 resultados.append({
+                                    'fila': idx + 1,
                                     'muestra': datos_muestra['muestra'],
                                     'octanaje': octanaje,
                                     'categoria': clasificacion['categoria'],
-                                    'pdf_path': ruta_pdf
+                                    'pdf_path': ruta_pdf,
+                                    'drive_url': drive_url
                                 })
                             
                             progress_bar.empty()
                             status_text.empty()
                             
                             st.session_state.pdfs_generados = resultados
-                            st.success(f"✅ {len(resultados)} PDFs generados correctamente")
+                            
+                            msg_success = f"✅ {len(resultados)} PDFs generados"
+                            if escribir_en_sheet:
+                                msg_success += " | Octanajes escritos en Sheet"
+                            if subir_a_drive:
+                                msg_success += " | PDFs subidos a Drive"
+                            st.success(msg_success)
             
             with col2:
                 if st.button("🔄 LIMPIAR", use_container_width=True):
@@ -737,29 +921,45 @@ with tab2:
             
             # Mostrar resultados
             if st.session_state.pdfs_generados:
-                st.markdown("### 📥 Descargar PDFs")
+                st.markdown("### 📥 Resultados y Descargas")
                 
-                st.dataframe(
-                    pd.DataFrame(st.session_state.pdfs_generados)[['muestra', 'octanaje', 'categoria']],
-                    use_container_width=True
-                )
+                # Crear DataFrame para mostrar
+                df_resultados = pd.DataFrame(st.session_state.pdfs_generados)
+                cols_mostrar = ['fila', 'muestra', 'octanaje', 'categoria']
                 
-                # Crear ZIP con todos los PDFs
-                zip_buffer = io.BytesIO()
-                with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
-                    for resultado in st.session_state.pdfs_generados:
-                        if os.path.exists(resultado['pdf_path']):
-                            zip_file.write(resultado['pdf_path'], os.path.basename(resultado['pdf_path']))
+                if subir_a_drive and 'drive_url' in df_resultados.columns:
+                    cols_mostrar.append('drive_url')
                 
-                zip_buffer.seek(0)
+                st.dataframe(df_resultados[cols_mostrar], use_container_width=True)
                 
-                st.download_button(
-                    "📦 DESCARGAR TODOS LOS PDFs (ZIP)",
-                    data=zip_buffer.getvalue(),
-                    file_name=f"Informes_Octanaje_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip",
-                    mime="application/zip",
-                    use_container_width=True
-                )
+                # Botón para descargar ZIP
+                if len(st.session_state.pdfs_generados) > 1:
+                    zip_buffer = io.BytesIO()
+                    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+                        for resultado in st.session_state.pdfs_generados:
+                            if os.path.exists(resultado['pdf_path']):
+                                zip_file.write(resultado['pdf_path'], os.path.basename(resultado['pdf_path']))
+                    
+                    zip_buffer.seek(0)
+                    
+                    st.download_button(
+                        "📦 DESCARGAR TODOS LOS PDFs (ZIP)",
+                        data=zip_buffer.getvalue(),
+                        file_name=f"Informes_Octanaje_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip",
+                        mime="application/zip",
+                        use_container_width=True
+                    )
+                else:
+                    # Descargar individual
+                    if os.path.exists(st.session_state.pdfs_generados[0]['pdf_path']):
+                        with open(st.session_state.pdfs_generados[0]['pdf_path'], 'rb') as f:
+                            st.download_button(
+                                "📄 DESCARGAR PDF",
+                                data=f.read(),
+                                file_name=os.path.basename(st.session_state.pdfs_generados[0]['pdf_path']),
+                                mime="application/pdf",
+                                use_container_width=True
+                            )
 
 # TAB 3 y TAB 4: Información del modelo y guía (código existente sin cambios)
 with tab3:
