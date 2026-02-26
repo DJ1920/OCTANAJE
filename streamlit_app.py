@@ -287,6 +287,9 @@ def leer_datos_sheet(sheet_id, sheet_name='Hoja1'):
     Lee datos del Google Sheet.
     Devuelve dos DataFrames: uno original (para mostrar) y uno procesado (para calcular).
     
+    Los valores en columnas P, I, O, N, A, E, MT, ET, OX están multiplicados por 100
+    en el Sheet (ej: 1274 en lugar de 12.74), así que se dividen automáticamente.
+    
     Args:
         sheet_id: ID del Google Sheet
         sheet_name: Nombre de la hoja (tab)
@@ -309,20 +312,30 @@ def leer_datos_sheet(sheet_id, sheet_name='Hoja1'):
         if not datos:
             return None, None, "El sheet está vacío o no tiene encabezados."
         
-        # DataFrame original (para mostrar)
+        # DataFrame original
         df_original = pd.DataFrame(datos)
         
         # DataFrame procesado (para calcular)
         df_procesado = df_original.copy()
         
-        # Convertir comas a puntos en columnas numéricas del DataFrame procesado
+        # Columnas que necesitan conversión
         columnas_numericas = ['P', 'I', 'O', 'N', 'A', 'E', 'MT', 'ET', 'OX']
+        
         for col in columnas_numericas:
             if col in df_procesado.columns:
-                # Convertir a string, reemplazar coma por punto, convertir a float
-                df_procesado[col] = df_procesado[col].astype(str).str.replace(',', '.').astype(float)
+                # Convertir a float y DIVIDIR POR 100
+                # Porque en el Sheet están como: 1274 (en lugar de 12.74)
+                df_procesado[col] = pd.to_numeric(df_procesado[col], errors='coerce') / 100
         
-        return df_original, df_procesado, None
+        # Para mostrar, también convertir el DataFrame original
+        df_mostrar = df_original.copy()
+        for col in columnas_numericas:
+            if col in df_mostrar.columns:
+                # Convertir a float, dividir por 100, y formatear con 2 decimales
+                df_mostrar[col] = pd.to_numeric(df_mostrar[col], errors='coerce') / 100
+                df_mostrar[col] = df_mostrar[col].apply(lambda x: f"{x:.2f}" if pd.notna(x) else x)
+        
+        return df_mostrar, df_procesado, None
     
     except Exception as e:
         return None, None, f"Error leyendo datos: {str(e)}"
@@ -844,8 +857,9 @@ with tab2:
             
             if subir_a_drive:
                 folder_id_drive = st.text_input(
-                    "ID de carpeta de Drive (opcional)",
-                    help="Deja vacío para subir a la raíz. ID se ve en la URL de la carpeta.",
+                    "📁 ID de carpeta de Drive",
+                    value=st.secrets.get("google_sheets", {}).get("drive_folder_id", ""),
+                    help="ID de la carpeta donde subir PDFs. Déjalo vacío para subir a la raíz.",
                     key="folder_drive"
                 )
             else:
