@@ -51,6 +51,8 @@ if 'resultado' not in st.session_state:
     st.session_state.resultado = None
 if 'datos_gsheets' not in st.session_state:
     st.session_state.datos_gsheets = None
+if 'datos_gsheets_original' not in st.session_state:
+    st.session_state.datos_gsheets_original = None
 if 'pdfs_generados' not in st.session_state:
     st.session_state.pdfs_generados = []
 
@@ -257,7 +259,8 @@ def conectar_google_sheets():
                 st.secrets["gcp_service_account"],
                 scopes=[
                     'https://www.googleapis.com/auth/spreadsheets',
-                    'https://www.googleapis.com/auth/drive'
+                    'https://www.googleapis.com/auth/drive',
+                    'https://www.googleapis.com/auth/drive.file'
                 ]
             )
         # Alternativa: leer de archivo local (para desarrollo)
@@ -266,7 +269,8 @@ def conectar_google_sheets():
                 'credentials.json',
                 scopes=[
                     'https://www.googleapis.com/auth/spreadsheets',
-                    'https://www.googleapis.com/auth/drive'
+                    'https://www.googleapis.com/auth/drive',
+                    'https://www.googleapis.com/auth/drive.file'
                 ]
             )
         else:
@@ -280,19 +284,20 @@ def conectar_google_sheets():
 
 def leer_datos_sheet(sheet_id, sheet_name='Hoja1'):
     """
-    Lee datos del Google Sheet y convierte comas decimales a puntos.
+    Lee datos del Google Sheet.
+    Devuelve dos DataFrames: uno original (para mostrar) y uno procesado (para calcular).
     
     Args:
         sheet_id: ID del Google Sheet
         sheet_name: Nombre de la hoja (tab)
     
     Returns:
-        tuple: (DataFrame con los datos, mensaje de error o None)
+        tuple: (DataFrame original, DataFrame procesado, mensaje de error o None)
     """
     try:
         client, error = conectar_google_sheets()
         if error:
-            return None, error
+            return None, None, error
         
         # Abrir el sheet
         sheet = client.open_by_key(sheet_id)
@@ -302,22 +307,25 @@ def leer_datos_sheet(sheet_id, sheet_name='Hoja1'):
         datos = worksheet.get_all_records()
         
         if not datos:
-            return None, "El sheet está vacío o no tiene encabezados."
+            return None, None, "El sheet está vacío o no tiene encabezados."
         
-        # Convertir a DataFrame
-        df = pd.DataFrame(datos)
+        # DataFrame original (para mostrar)
+        df_original = pd.DataFrame(datos)
         
-        # Convertir comas a puntos en columnas numéricas
+        # DataFrame procesado (para calcular)
+        df_procesado = df_original.copy()
+        
+        # Convertir comas a puntos en columnas numéricas del DataFrame procesado
         columnas_numericas = ['P', 'I', 'O', 'N', 'A', 'E', 'MT', 'ET', 'OX']
         for col in columnas_numericas:
-            if col in df.columns:
+            if col in df_procesado.columns:
                 # Convertir a string, reemplazar coma por punto, convertir a float
-                df[col] = df[col].astype(str).str.replace(',', '.').astype(float)
+                df_procesado[col] = df_procesado[col].astype(str).str.replace(',', '.').astype(float)
         
-        return df, None
+        return df_original, df_procesado, None
     
     except Exception as e:
-        return None, f"Error leyendo datos: {str(e)}"
+        return None, None, f"Error leyendo datos: {str(e)}"
 
 def escribir_octanaje_en_sheet(sheet_id, sheet_name, fila, octanaje):
     """
@@ -364,35 +372,59 @@ def subir_pdf_a_drive(pdf_path, folder_id=None):
         from googleapiclient.discovery import build
         from googleapiclient.http import MediaFileUpload
         
-        client, error = conectar_google_sheets()
-        if error:
-            return None, error
+        # Verificar que el archivo existe
+        if not os.path.exists(pdf_path):
+            return None, f"Archivo no encontrado: {pdf_path}"
         
-        # Usar las mismas credenciales para Drive API
+        # Obtener credenciales con scope de Drive
         if 'gcp_service_account' in st.secrets:
             from google.oauth2.service_account import Credentials
             credentials = Credentials.from_service_account_info(
                 st.secrets["gcp_service_account"],
-                scopes=['https://www.googleapis.com/auth/drive.file']
+                scopes=[
+                    'https://www.googleapis.com/auth/drive',
+                    'https://www.googleapis.com/auth/drive.file'
+                ]
             )
         else:
             return None, "No se encontraron credenciales"
         
+        # Construir servicio de Drive
         service = build('drive', 'v3', credentials=credentials)
         
-        file_metadata = {'name': os.path.basename(pdf_path)}
+        # Preparar metadata del archivo
+        file_metadata = {
+            'name': os.path.basename(pdf_path)
+        }
+        
+        # Si se especifica carpeta, añadir a metadata
         if folder_id:
             file_metadata['parents'] = [folder_id]
         
-        media = MediaFileUpload(pdf_path, mimetype='application/pdf')
+        # Crear media upload
+        media = MediaFileUpload(
+            pdf_path,
+            mimetype='application/pdf',
+            resumable=True
+        )
         
+        # Subir archivo
         file = service.files().create(
             body=file_metadata,
             media_body=media,
-            fields='id, webViewLink'
+            fields='id, webViewLink, webContentLink'
         ).execute()
         
-        return file.get('webViewLink'), f"PDF subido correctamente: {file.get('webViewLink')}"
+        # Hacer el archivo accesible públicamente (opcional)
+        try:
+            service.permissions().create(
+                fileId=file.get('id'),
+                body={'type': 'anyone', 'role': 'reader'}
+            ).execute()
+        except:
+            pass  # Si falla el permiso público, continuar
+        
+        return file.get('webViewLink'), f"PDF subido correctamente"
     
     except Exception as e:
         return None, f"Error subiendo a Drive: {str(e)}"
@@ -713,23 +745,28 @@ with tab2:
             st.error("❌ Por favor, proporciona el ID del Google Sheet")
         else:
             with st.spinner("🔄 Conectando con Google Sheets..."):
-                df, error = leer_datos_sheet(sheet_id, sheet_name)
+                df_original, df_procesado, error = leer_datos_sheet(sheet_id, sheet_name)
                 
                 if error:
                     st.error(f"❌ Error: {error}")
                     st.info("💡 Verifica que:\n- Las credenciales están configuradas en Secrets\n- El Sheet está compartido con la cuenta de servicio\n- El nombre de la hoja es correcto")
                 else:
-                    st.session_state.datos_gsheets = df
-                    st.success(f"✅ Datos leídos correctamente: {len(df)} filas")
+                    # Guardar ambos DataFrames
+                    st.session_state.datos_gsheets_original = df_original
+                    st.session_state.datos_gsheets = df_procesado
+                    st.success(f"✅ Datos leídos correctamente: {len(df_procesado)} filas")
     
-    # Mostrar datos si existen
+    # Mostrar datos si existen (usar el original para la vista previa)
     if st.session_state.datos_gsheets is not None:
+        # DataFrame procesado para cálculos
         df = st.session_state.datos_gsheets
+        # DataFrame original para mostrar
+        df_mostrar = st.session_state.get('datos_gsheets_original', df)
         
         st.markdown("### 📋 Vista Previa de Datos")
         
-        # Mostrar TODAS las filas con scroll
-        st.dataframe(df, use_container_width=True, height=400)
+        # Mostrar TODAS las filas del DataFrame ORIGINAL (con comas)
+        st.dataframe(df_mostrar, use_container_width=True, height=400)
         st.caption(f"Mostrando todas las {len(df)} filas")
         
         # Verificar que las columnas necesarias existen
@@ -916,6 +953,7 @@ with tab2:
             with col2:
                 if st.button("🔄 LIMPIAR", use_container_width=True):
                     st.session_state.datos_gsheets = None
+                    st.session_state.datos_gsheets_original = None
                     st.session_state.pdfs_generados = []
                     st.rerun()
             
