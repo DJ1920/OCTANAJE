@@ -318,13 +318,19 @@ def leer_datos_sheet(sheet_id, sheet_name='Hoja1'):
         # DataFrame procesado (para calcular)
         df_procesado = df_original.copy()
         
-        # Columnas que necesitan conversión
-        columnas_numericas = ['P', 'I', 'O', 'N', 'A', 'E', 'MT', 'ET', 'OX']
+        # Columnas que necesitan conversión (DIVIDIR POR 100)
+        # TODAS las columnas numéricas en el Sheet están multiplicadas x100
+        columnas_numericas = ['P', 'I', 'O', 'N', 'A', 'E', 'MT', 'ET', 'OX', 'RON']
+        
+        # También incluir columnas calculadas si existen
+        columnas_adicionales = ['MACHINE LEARNING', 'DIFERENCIA']
+        for col in columnas_adicionales:
+            if col in df_procesado.columns:
+                columnas_numericas.append(col)
         
         for col in columnas_numericas:
             if col in df_procesado.columns:
                 # Convertir a float y DIVIDIR POR 100
-                # Porque en el Sheet están como: 1274 (en lugar de 12.74)
                 df_procesado[col] = pd.to_numeric(df_procesado[col], errors='coerce') / 100
         
         # Para mostrar, también convertir el DataFrame original
@@ -332,8 +338,8 @@ def leer_datos_sheet(sheet_id, sheet_name='Hoja1'):
         for col in columnas_numericas:
             if col in df_mostrar.columns:
                 # Convertir a float, dividir por 100, y formatear con 2 decimales
-                df_mostrar[col] = pd.to_numeric(df_mostrar[col], errors='coerce') / 100
-                df_mostrar[col] = df_mostrar[col].apply(lambda x: f"{x:.2f}" if pd.notna(x) else x)
+                valor_numerico = pd.to_numeric(df_mostrar[col], errors='coerce') / 100
+                df_mostrar[col] = valor_numerico.apply(lambda x: f"{x:.2f}" if pd.notna(x) else x)
         
         return df_mostrar, df_procesado, None
     
@@ -343,11 +349,12 @@ def leer_datos_sheet(sheet_id, sheet_name='Hoja1'):
 def escribir_octanaje_en_sheet(sheet_id, sheet_name, fila, octanaje):
     """
     Escribe el octanaje calculado en la columna M del Google Sheet.
+    Lo escribe como texto formateado para asegurar que se muestre con decimal.
     
     Args:
         sheet_id: ID del Google Sheet
         sheet_name: Nombre de la hoja
-        fila: Número de fila (1-indexed, incluyendo encabezado)
+        fila: Número de fila (0-indexed, sin incluir encabezado)
         octanaje: Valor de octanaje a escribir
     
     Returns:
@@ -361,14 +368,17 @@ def escribir_octanaje_en_sheet(sheet_id, sheet_name, fila, octanaje):
         sheet = client.open_by_key(sheet_id)
         worksheet = sheet.worksheet(sheet_name)
         
-        # Escribir en columna M (índice 13)
-        # fila + 1 porque la fila 1 es el encabezado
-        worksheet.update_cell(fila + 2, 13, round(octanaje, 1))
+        # Formatear con 1 decimal como texto para asegurar visualización correcta
+        valor_formateado = f"{octanaje:.1f}"
         
-        return True, "Octanaje escrito correctamente"
+        # Escribir en columna M (índice 13)
+        # fila + 2 porque: +1 para 1-indexed, +1 por el encabezado
+        worksheet.update_cell(fila + 2, 13, valor_formateado)
+        
+        return True, f"✅ Octanaje escrito: {valor_formateado}"
     
     except Exception as e:
-        return False, f"Error escribiendo en Sheet: {str(e)}"
+        return False, f"❌ Error escribiendo en Sheet: {str(e)}"
 
 def subir_pdf_a_drive(pdf_path, folder_id=None):
     """
@@ -384,10 +394,11 @@ def subir_pdf_a_drive(pdf_path, folder_id=None):
     try:
         from googleapiclient.discovery import build
         from googleapiclient.http import MediaFileUpload
+        from googleapiclient.errors import HttpError
         
         # Verificar que el archivo existe
         if not os.path.exists(pdf_path):
-            return None, f"Archivo no encontrado: {pdf_path}"
+            return None, f"❌ Archivo no encontrado: {pdf_path}"
         
         # Obtener credenciales con scope de Drive
         if 'gcp_service_account' in st.secrets:
@@ -400,10 +411,30 @@ def subir_pdf_a_drive(pdf_path, folder_id=None):
                 ]
             )
         else:
-            return None, "No se encontraron credenciales"
+            return None, "❌ No se encontraron credenciales"
         
         # Construir servicio de Drive
         service = build('drive', 'v3', credentials=credentials)
+        
+        # Si se proporciona folder_id, verificar que existe y es accesible
+        if folder_id:
+            try:
+                folder = service.files().get(
+                    fileId=folder_id,
+                    fields='id, name, mimeType'
+                ).execute()
+                
+                # Verificar que es una carpeta
+                if folder.get('mimeType') != 'application/vnd.google-apps.folder':
+                    return None, f"❌ El ID proporcionado no es una carpeta: {folder_id}"
+                
+            except HttpError as e:
+                if e.resp.status == 404:
+                    return None, f"❌ Carpeta no encontrada. Verifica el ID: {folder_id}"
+                elif e.resp.status == 403:
+                    return None, f"❌ Sin permisos. Comparte la carpeta con: {credentials.service_account_email}"
+                else:
+                    return None, f"❌ Error verificando carpeta: {str(e)}"
         
         # Preparar metadata del archivo
         file_metadata = {
@@ -437,10 +468,12 @@ def subir_pdf_a_drive(pdf_path, folder_id=None):
         except:
             pass  # Si falla el permiso público, continuar
         
-        return file.get('webViewLink'), f"PDF subido correctamente"
+        return file.get('webViewLink'), f"✅ PDF subido correctamente"
     
+    except HttpError as e:
+        return None, f"❌ Error HTTP {e.resp.status}: {str(e)}"
     except Exception as e:
-        return None, f"Error subiendo a Drive: {str(e)}"
+        return None, f"❌ Error subiendo a Drive: {str(e)}"
 
 # ═══════════════════════════════════════════════════════════════════════════
 # CARGA DEL MODELO
